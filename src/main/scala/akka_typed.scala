@@ -23,6 +23,23 @@ import scala.io.StdIn
 import scala.util.{Failure, Success}
 
 
+import akka.NotUsed
+import akka.actor.typed._
+import akka.actor.typed.scaladsl.{ActorContext, Behaviors}
+import akka.persistence.cassandra.query.scaladsl.CassandraReadJournal
+import akka.persistence.query.{EventEnvelope, PersistenceQuery}
+import akka.persistence.typed.PersistenceId
+import akka.persistence.typed.scaladsl.{Effect, EventSourcedBehavior}
+import akka.stream.ClosedShape
+import akka.stream.alpakka.slick.scaladsl.{Slick, SlickSession}
+import akka.stream.scaladsl.{Broadcast, Flow, GraphDSL, RunnableGraph, Sink, Source}
+import akka_typed.CalculatorRepository._
+import slick.jdbc.JdbcBackend.Database
+
+import scala.concurrent.Await
+import scala.concurrent.duration._
+import scala.language.postfixOps
+
 
 case class Action(value: Int, name: String)
 
