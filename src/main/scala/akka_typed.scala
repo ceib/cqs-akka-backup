@@ -1,6 +1,4 @@
-import akka.NotUsed
-import akka.actor.typed.scaladsl.{ActorContext, Behaviors}
-import akka.actor.typed.{ActorSystem, Props, _}
+import akka.{Done, NotUsed}
 import akka.persistence.typed.PersistenceId
 import akka.persistence.typed.scaladsl.{Effect, EventSourcedBehavior, RetentionCriteria}
 import akka.NotUsed
@@ -15,14 +13,12 @@ import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.Source
 import akka.actor.typed.ActorSystem
 import akka.actor.typed.scaladsl.Behaviors
-import akka_typed.CalculatorRepository.{getLatestOffsetAndResult, initDataBase, updateResultAndOfsset}
+import akka_typed.CalculatorRepository.{getLatestOffsetAndResult, initDataBase}
 import akka_typed.TypedCalculatorWriteSide.{Add, Added, Command, Divide, Divided, Multiplied, Multiply}
 
 import scala.concurrent.duration._
 import scala.io.StdIn
 import scala.util.{Failure, Success}
-
-
 import akka.NotUsed
 import akka.actor.typed._
 import akka.actor.typed.scaladsl.{ActorContext, Behaviors}
@@ -36,7 +32,7 @@ import akka.stream.scaladsl.{Broadcast, Flow, GraphDSL, RunnableGraph, Sink, Sou
 import akka_typed.CalculatorRepository._
 import slick.jdbc.JdbcBackend.Database
 
-import scala.concurrent.Await
+import scala.concurrent.{Await, Future}
 import scala.concurrent.duration._
 import scala.language.postfixOps
 
@@ -74,19 +70,19 @@ object akka_typed {
     }
 
     def apply(): Behavior[Command] = Behaviors.setup { ctx =>
-        EventSourcedBehavior[Command, Event, State](
-          persistenceId = persId,
-          State.empty,
-          (state, command) => handleCommand("001", state, command, ctx),
-          (state, event) => handleEvent(state, event, ctx)
-        )
-//          .snapshotWhen{
-//            case (state, CalculationCompleted(_, _), seqNumber) if seqNumber % 10 == 0 => true
-//            case (state, event, seqNumber) => false
-//          }
-          .withRetention(RetentionCriteria.snapshotEvery(numberOfEvents = 100, keepNSnapshots = 2)
-            .withDeleteEventsOnSnapshot)
-      }
+      EventSourcedBehavior[Command, Event, State](
+        persistenceId = persId,
+        State.empty,
+        (state, command) => handleCommand("001", state, command, ctx),
+        (state, event) => handleEvent(state, event, ctx)
+      )
+        //          .snapshotWhen{
+        //            case (state, CalculationCompleted(_, _), seqNumber) if seqNumber % 10 == 0 => true
+        //            case (state, event, seqNumber) => false
+        //          }
+        .withRetention(RetentionCriteria.snapshotEvery(numberOfEvents = 100, keepNSnapshots = 2)
+          .withDeleteEventsOnSnapshot)
+    }
 
     def handleCommand(
                        persistenceId: String,
@@ -135,42 +131,45 @@ object akka_typed {
 
   case class TypedCalculatorReadSide(system: ActorSystem[NotUsed]) {
     initDataBase
-
     implicit val materializer            = system.classicSystem
+    implicit val session: SlickSession = SlickSession.forConfig("slick-postgres")
+    materializer.registerOnTermination(() => session.close())
+    import session.profile.api._
+
     var (offset, latestCalculatedResult) = getLatestOffsetAndResult
     val startOffset: Int                 = if (offset == 1) 1 else offset + 1
 
-    //    val readJournal: LeveldbReadJournal =
     val readJournal: CassandraReadJournal =
       PersistenceQuery(system).readJournalFor[CassandraReadJournal](CassandraReadJournal.Identifier)
 
     val source: Source[EventEnvelope, NotUsed] = readJournal
       .eventsByPersistenceId("001", startOffset, Long.MaxValue)
-  // extract, transform ~ flow, load ~ sink
-    source
-      .map{ x =>
-        println(x.toString())
-        x
-      }
-      .runForeach { event =>
+
+    val flow: Flow[EventEnvelope, EventEnvelope, NotUsed] = Flow[EventEnvelope].map{
+      event =>
         event.event match {
           case Added(_, amount) =>
-            //          println(s"!Before Log from Added: $latestCalculatedResult")
             latestCalculatedResult += amount
-            updateResultAndOfsset(latestCalculatedResult, event.sequenceNr)
             println(s"! Log from Added: $latestCalculatedResult")
           case Multiplied(_, amount) =>
-            //          println(s"!Before Log from Multiplied: $latestCalculatedResult")
             latestCalculatedResult *= amount
-            updateResultAndOfsset(latestCalculatedResult, event.sequenceNr)
             println(s"! Log from Multiplied: $latestCalculatedResult")
           case Divided(_, amount) =>
-            //          println(s"! Log from Divided before: $latestCalculatedResult")
             latestCalculatedResult /= amount
-            updateResultAndOfsset(latestCalculatedResult, event.sequenceNr)
             println(s"! Log from Divided: $latestCalculatedResult")
         }
-      }
+        event
+    }
+
+    val sink: Sink[EventEnvelope, Future[Done]] = Slick.sink {
+      eventEnvelope =>
+        sqlu"update public.result set calculated_value = ${latestCalculatedResult}, write_side_offset = ${eventEnvelope.sequenceNr} where id = 1"
+    }
+
+    val graph: RunnableGraph[NotUsed] = source
+      .via(flow).async
+      .to(sink).async
+
   }
 
   object CalculatorRepository {
@@ -192,14 +191,6 @@ object akka_typed {
       entities.head
     }
 
-    def updateResultAndOfsset(calculated: Double, offset: Long): Unit = {
-      using(DB(ConnectionPool.borrow())) { db =>
-        db.autoClose(true)
-        db.localTx {
-          _.update("update public.result set calculated_value = ?, write_side_offset = ? where id = ?", calculated, offset, 1)
-        }
-      }
-    }
   }
 
 
@@ -207,13 +198,13 @@ object akka_typed {
     Behaviors.setup { ctx =>
       val writeActorRef = ctx.spawn(TypedCalculatorWriteSide(), "Calculato", Props.empty)
 
-      writeActorRef ! Add(0)
-//      writeActorRef ! Multiply(2)
-//      writeActorRef ! Divide(5)
+      writeActorRef ! Add(10)
+      //      writeActorRef ! Multiply(2)
+      //      writeActorRef ! Divide(5)
 
-//        (1 to 50).foreach{ x =>
-//          writeActorRef ! Add(10)
-//        }
+      (1 to 80).foreach{ x =>
+        writeActorRef ! Add(10)
+      }
 
 
 
@@ -229,7 +220,7 @@ object akka_typed {
     val value = akka_typed()
     implicit val system: ActorSystem[NotUsed] = ActorSystem(value, "akka_typed")
 
-    TypedCalculatorReadSide(system)
+    TypedCalculatorReadSide(system).graph.run()
 
     implicit val executionContext = system.executionContext
   }
