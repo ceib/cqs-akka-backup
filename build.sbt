@@ -30,6 +30,19 @@ libraryDependencies ++= Seq(
   "com.typesafe.slick" %% "slick-hikaricp"                      % "3.3.3",
   "com.lightbend.akka" %% "akka-stream-alpakka-slick"           % "3.0.3",
 
+
+  "com.typesafe.akka"  %% "akka-persistence"              % "2.6.14",
+  "com.typesafe.akka"  %% "akka-coordination"             % "2.6.14",
+  "com.typesafe.akka"  %% "akka-remote"                   % "2.6.14",
+  "com.typesafe.akka"  %% "akka-cluster"                  % "2.6.14",
+  "com.typesafe.akka"  %% "akka-pki"                      % "2.6.14",
+  "com.typesafe.akka"  %% "akka-stream-typed"             % "2.6.14",
+  "com.typesafe.akka"  %% "akka-actor-typed"              % "2.6.14",
+  "com.typesafe.akka"  %% "akka-persistence-query"        % "2.6.14",
+  "com.typesafe.akka"  %% "akka-slf4j"                    % "2.6.14",
+  "com.typesafe.akka"  %% "akka-persistence-typed"        % "2.6.14",
+  "com.typesafe.akka"  %% "akka-cluster-tools"            % "2.6.14",
+
   //  local levelDB stores
   "org.iq80.leveldb"          % "leveldb"        % leveldbVersion,
   "org.fusesource.leveldbjni" % "leveldbjni-all" % leveldbjniVersion
